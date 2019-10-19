@@ -256,5 +256,265 @@ enemies but they're not always the best of friends.
 
 ### Moose Implementation
 
+What do you get when you look inside a Moose?
+
+#### Moose is Built on Existing Perl Primitives
+
+One of the good things about Moose is that it interoperates pretty well with
+existing Perl core-OO code. This is because Perl's core OO system provides
+mostly sufficient primitives, except where it doesn't. Moose is built on:
+
+ * `@ISA`
+ * `UNIVERSAL`
+ * method dispatch
+ * blessed hashes
+ * packages
+ * method invocation is function invocation
+
+"How should a new core object system behave with existing code" is a semantics
+and implementation question. It comes up here only as it influences how Moose
+works and how Moose is used.
+
+#### Moose is Export-Centric
+
+Why does Moose export `strict` and `warnings`? That's a policy decision! I tend
+to agree with the policy in general, but as a mechanism of an OO system it
+seems questionable, unless you realize that one underlying goal of Moose is to
+reduce boilerplate code.
+
+Again, this is a good goal in and of itself, but it shows that Moose blurs the
+lines between the explicit semantics of an object system and the behavior of a
+program as a whole.
+
+At least these pragmas are lexically scoped. Yet what does this do?
+
+    package SomeClass;
+
+    use Moose;
+
+    has 'attribute', is => 'rw';
+
+    package OtherClass;
+
+    $foo = bar();
+    has 'another_attribute';
+
+That's right; `has()` is out of scope outside of the `SomeClass` package, but
+`strict` is in scope.
+
+This is mostly not Moose's fault, except that it brings the effect of lexical
+pragmas with package-scoped exports.
+
+#### Moose is Function Export-Centric
+
+Maybe that should be _closure_ export-centric. For Moose to do its magic, it
+has to carry around specific knowledge of a context which is created when you
+`use Moose` or `use Moose::Role`. That means what Moose exports is a closure.
+Sometimes.
+
+This is important because, for metaclasses and
+partial-classes-under-construction and you-didn't-make-it-immutable-yet-or-ever
+classes to work, something somewhere has the baggage duty of keeping track of
+data and metadata because the Perl core sure isn't doing it.
+
+Sometimes you see the seams in this approach:
+
+    package SomeClass;
+
+    use Moose;
+
+    has 'attribute', is => 'rw';
+
+    package OtherClass;
+
+    SomeClass::has( 'another_attribute' );
+
+That obviously _shouldn't_ work, but what does the error message suggest is going on?
+
+What happens if you accidentally call one of Moose's exported functions in a
+subclass? (Yes, that's what something like
+[namespace::autoclean](https://metacpan.org/pod/namespace::autoclean) is
+for.)
+
+Moose's implementation relies on a combination of:
+
+ * a consumer using a Moose entrypoint module
+ * exporting functions/closures into a namespace
+ * exporting pragmas into a lexical scope
+
+This is a natural, normal, and expected way to implement Moose in a
+backwards-compatible way which requires no additional core OO support. However
+it is not necessarily the best way to implement a new core object system and
+its design decisions should not remain unchallenged when fundamental
+constraints that were in place for Moose are removed.
 
 ### Moose Syntax
+
+Moose offers some syntax. Does it offer enough syntax? No. Does it offer the
+right syntax? Given what it's trying to accomplish and the environment it found
+itself, mostly. Yet this syntax should not go unchallenged.
+
+#### Moose Infers Classes
+
+What's a Moose class? More importantly, what does it look like when you're
+reading code?
+
+A Moose class is a package which doesn't define its own constructor and which
+uses the module `Moose`. This allows Moose to export its functions into a
+namespace (but not _lexically_).
+
+Any package into which Moose imports is now a Moose class, except when it
+isn't:
+
+    use Modern::Perl;
+    use Path::Class;
+    use File::Find;
+
+    package Foo::Bar    { use Moose };
+    package Path::Class { use Moose };
+    package File::Find  { use Moose };
+
+    package main;
+
+    sub main {
+        my $fb = Foo::Bar->new;
+        my $pc = Path::Class->new; # no constructor here
+        my $ff = File::Find->new;  # no constructor here
+
+        return 0;
+    }
+
+    exit main( @ARGV );
+
+Then again, sometimes it is:
+
+    use Modern::Perl;
+    use Path::Class;
+    use File::Find;
+
+    package Foo::Bar    { use Moose };
+    package Path::Class { use Moose; __PACKAGE__->meta->make_immutable; };
+    package File::Find  { use Moose; __PACKAGE__->meta->make_immutable; };
+
+    package main;
+
+    sub main {
+        my $fb = Foo::Bar->new;
+        my $pc = Path::Class->new;
+        my $ff = File::Find->new;
+
+        return 0;
+    }
+
+    exit main( @ARGV );
+
+While it's obviously silly to take modules which weren't designed as classes
+and try to force them into Moose behavior, it's odd that both of these things
+are true:
+
+ * importing Moose into a package from outside doesn't Moosify it
+ * ... unless you add an optional optimization that is supposed to be
+   semantically neutral
+
+#### Moose Doesn't Infer Roles
+
+What's a Moose role? More importantly, what does it look like when you're reading code?
+
+A Moose role is a package which doesn't define its own constructor and which
+uses the module [Moose::Role](https://metacpan.org/pod/Moose::Role).
+
+This is a very minor point, but when the obvious visual difference is "which
+function-exporting module did I import", that's a small syntactic marker for a
+large semantic difference. Moops does this better.
+
+#### Insert Punctuation (to Clarify (Sometimes?!))
+
+I've never liked this attribute declaration syntax:
+
+    package Foo;
+    use Moose;
+
+    has 'message' => (
+        is      => 'rw',
+        isa     => 'Str',
+        default => 'Hello, I am a Foo'
+    );
+
+This is parsed and executed equivalently to:
+
+    has( 'message', 'is', 'rw', 'isa', 'Str', 'default', 'Hello, I am a Foo' );
+
+... though the use of the `=>` quoting arrow does make it clear that there is a
+syntactic and semantic pairwise association between its lvalues and rvalues.
+
+While one could argue successfully that grouping the attributes of the
+attribute (the meta-attributes?) in parentheses serves a visual distinction in
+the same way, quoting the attribute name is completely unnecessary
+syntactically with the pairwise quoting arrow.
+
+As petty as "why are there parentheses here and unnecessary quotes are
+unnecessary" is (and it's very petty), it's even more petty to note how much
+visual space attribute declaration takes up within a Moose class. I personally
+believe this is because:
+
+ * writing good accessors is a lot of work (so Moose reducing the boilerplate
+   is generally a good thing!)
+ * writing good classes and objects means limiting access to nouns and
+   concentrating on verbs (which is a semantic argument where Moose *and* Perl
+   may not want to take the same strong stance I do)
+ * what does an attribute _mean_ anyhow?
+    ** Is it derived data?
+    ** Does mutating it change the behavior of the object?
+    ** Is this class just a struct with behavior? Should it be? Should that be _impossible_?
+
+Note that the syntax for various attribute behaviors is clunky (I _think_ this
+is because of the desire to make all of this syntax look and act superficially
+consistently, but I could be wrong about this). For example, delegation (here,
+`handles`) uses a hash reference:
+
+    package User;
+
+    has 'last_login' => (
+        is      => 'rw',
+        isa     => 'DateTime',
+        handles => { 'date_of_last_login' => 'date' },
+    );
+
+Default attribute values (here, `default`) may be specified inline as literals
+or function references (in which case, presumably you can't use a function
+reference as a default value unless you wrap it in a function reference
+itself):
+
+    has 'size' => (
+        is        => 'ro',
+        default   => sub { ( 'small', 'medium', 'large' )[ int( rand 3 ) ] },
+        predicate => 'has_size',
+    );
+
+    has 'unworking_reference' => (
+        is        => 'ro',
+        default   => [], # don't do this
+    );
+
+    has 'gift_wrapped_function_reference' => (
+        is      => 'ro',
+        default => sub { sub { 'here is my callback, finally' } },
+    );
+
+A builder is called by name (so it can be overridden), but a trigger is
+provided as a subroutine reference which is called as a method (which makes it
+more difficult to override in a subclass).
+
+[This is a lot to keep in mind](https://metacpan.org/pod/distribution/Moose/lib/Moose/Manual/Attributes.pod).
+
+#### Moose is Method-Centric
+
+How do you access attributes? Moose blesses hashes, so... you use accessors.
+(Encapsulation is a good thing, but it implies some encapsulation access
+mechanism and that's methods in Moose. That's why getters and setters and
+clearers and builders are so important in Moose's attribute-centric model.)
+
+How can Moose be both method- _and_ attribute-centric? How does Moose handle
+class methods? About the same way the Perl core does! Again, that's not Moose
+making a bad decision; it's Moose being consistent with the design of the Perl
+core.
