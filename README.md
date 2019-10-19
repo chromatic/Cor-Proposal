@@ -182,6 +182,79 @@ like:
 
 That means writing do-nothing code to avoid having the wrong behavior by default.
 
+#### Moose Favors the Wrong Things
+
+Again, this is not a criticism of Moose qua Moose but instead an
+acknowledgement that Moose's design is optimized for certain goals that are not
+necessarily the correct goals for a stronger core object model.
+
+For example, *Moose classes are not immutable by default*. This produces a
+speed penalty that can be obviated by adding the boilerplate to the end of
+every class declaration:
+
+    __PACKAGE__->meta->make_immutable;
+
+This is similar in spirit to the boilerplate that every Perl package must end
+with a true value, one which `Moops` at least attempts to clear up with its
+`class` and `role` keywords.
+
+*Moose classes favor inheritance over composition*, especially with regard to
+its method modifiers. While the provenance of these modifiers has a
+distinguished language heritage, the putative source of their design in Common
+Lisp demonstrates the difference between a class-based object-dispatched method
+system and a functional multiple dispatch system.
+
+In this case, I can't decide how serious I am with this point, because I'm not
+sure I understand if these method modifiers would be necessary as implemented
+if Moose favored other composition or aggregation or delegation semantics over
+inheritance; would `around` or `before` be necessary?
+
+*Moose uses the word "parameterized"* instead of "parametric" to describe
+partially-closed-while-unapplied roles, which is objectively a violation of
+sensible linguistic taste.
+
+*Moose makes lightweight classes difficult* in the sense that this code should
+be easy to make more correct with better types:
+
+    method update_needle_description( Int $haystack_id, Int $needle_id, Str $description ) {
+        $self->update_needle_description_sth->execute( $description, $needle_id, $haystack_id );
+    }
+
+Using the same type of `Int` to represent two different types of foreign keys
+means that this method has a needle-haystack problem. (In fact, this is a bug I
+fixed in code I wrote this week, so it's a tender subject.) If I had a specific
+integer type for a Version ID versus an Ingredients ID, I could rely on the
+[Kavorka](https://metacpan.org/pod/Kavorka) signature/type system to tell me
+that I'd written the consumer of this method incorrectly.
+
+Why would I want a class to represent these integers rather than a
+specifically-typed integer? That's a good question. First, because Perl lacks a
+mechanism of identifying subtypes of primitives without attaching some sort of
+package identity (or doing deeper, more esoteric magic). Second, because I know
+I'm unlikely to lose that object identity by passing objects around because I'm
+not doing anything to lose the blessedness of a reference.
+
+I _could_ have gone through the work of defining classes to represent the
+primary keys for every table in this application, but I didn't in part because
+I didn't think I'd need it because the overhead of doing so felt so silly. (I
+grow more and more sympathetic to this argument the more I think about
+[Primitive
+Obsession](https://www.jamesshore.com/Blog/PrimitiveObsession.html)).
+
+##### Undercutting the Needle/Haystack Class Argument
+
+One could easily say "This is a good example of why you should use a real ORM"
+which hides these details, and that's not a bad argument on its face, but that
+only applies to primitives used for primary keys in relational systems and
+ignores all of the other primitives which could benefit from encapsulation,
+immutability, verifiably-correct-at-construction-time features.
+
+One could also say "This demonstrates that SQL is verbose and leads to
+hard-to-use APIs when you hard-code the order of bound parameters in a query",
+in which case the answer is that correctness and performance are not always
+enemies but they're not always the best of friends.
+
 ### Moose Implementation
+
 
 ### Moose Syntax
