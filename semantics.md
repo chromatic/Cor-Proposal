@@ -33,7 +33,7 @@ order of importance or priority.
 An object system should allow language users to extend the capabilities of the
 language in ways the language designers have not foreseen. This does not
 necessarily imply _adding_ new language features by creating classes and
-objects, but it does imply addressing unanticipate problems and activities.
+objects, but it does imply addressing unanticipated problems and activities.
 
 For example, [XML::Rabbit](https://metacpan.org/pod/XML::Rabbit) uses Moose and
 its metaclass system to provide an object-based approach to working with XML
@@ -57,7 +57,7 @@ In terms of an object system, important questions here include:
 
  * is it possible to construct unusable objects?
  * do objects follow fundamental language features such as ordering,
-   debuggability, and argument passsing?
+   debuggability, and argument passing?
  * does class and metaclass syntax introduce edge cases to the rest of the
    language?
  * do object feature introduce correctness risks when combined with other
@@ -174,6 +174,125 @@ feature", except the argument isn't primarily about `autobox` at all -- it's
 about the kinds of things that are like `autobox` that someone will want in the
 future.
 
+## Implement Coercion in the Right Places
+
+Consider again the example of modeling a database connection. If you use
+[DBI](https://metacpan.org/pod/DBI), you'll end up passing in some sort of
+connection information, including some or all of:
+
+  * the `DBD` class of the connector (SQLite, PostgreSQL, CSV, etc)
+  * the hostname of a database server
+  * the port of a database server
+  * the path to a file
+  * the username of a database user
+  * the password of a database user
+
+Much of this data can and should be ephemeral; an object that persists
+authentication and authorization credentials after making an authenticated
+token is doing something risky.
+
+It's easy to understand the idea of "a constructor needs some data to construct
+an object, but should not expose that data after successful object
+construction", but the subtle point is that this is the same _type_ of
+operation seen elsewhere in larger and smaller places.
+
+Consider also the example of constructing a
+[DateTime](https://metacpan.org/pod/DateTime) object from epoch seconds.
+`DateTime->from_epoch( epoch => $epoch_seconds )` is a constructor the same way as:
+
+    DateTime->new(
+        year      => 2003,
+        month     => 10,
+        day       => 26,
+        hour      => 1,
+        minute    => 30,
+        second    => 0,
+        time_zone => 'America/Chicago',
+    );
+
+... and `DateTime->today`. In all three cases, `DateTime` takes some (or none)
+incoming data and converts it to a canonical internal representation.
+
+What about coercing something that isn't a constructor? What about coercion in
+an accessor method? Here's [Moose Subtypes and Coercion example
+code](https://metacpan.org/pod/distribution/Moose/lib/Moose/Cookbook/Basics/HTTP_SubtypesAndCoercion.pod):
+
+    coerce 'My::Types::URI'
+    => from 'Object'
+        => via { $_->isa('URI')
+                 ? $_
+                 : Params::Coerce::coerce( 'URI', $_ ); }
+    => from 'Str'
+        => via { URI->new( $_, 'http' ) };
+
+    has 'uri'  => ( is => 'rw', isa => 'My::Types::URI', coerce => 1 );
+
+This declares an attribute `uri` with a getter and a setter. When the setter
+receives a string, it tries to create a new `URI` object.
+
+In all three cases -- explicit `new` constructor, alternate constructor not
+named `new`, single-attribute setter -- the object system provides a mechanism which:
+
+  * validates the well-formedness of the incoming data (`Object` and `Str` and
+    `My::Types::URI` are acceptable types for `uri`)
+  * validates the correctness of the incoming data (if the DBD can't be found
+    or the PostgreSQL password is wrong, you don't get a DBI handle)
+  * transforms the incoming data into the modeled internal representation (a
+    `DateTime` object has time and date and time zone information)
+
+It's important to recognize all three features of this mechanism while also
+recognizing that the _scope_ of the mechanism should be different based on the
+nature of what you expect to get out of the coercion. In other words, I don't
+care about the internal representation of database connection information after
+I have a database handle, but I do care about the internal representation of
+`uri` because that's what I'm going to get back if I ever call the accessor.
+
+Without getting too deeply into syntactic concerns, the coercion must:
+
+  * define obviously the interface to a constructor or attribute setter
+  * represent the scope of data provided to the previous item appropriately
+  * expose no more data than necessary
+
+Moose is heavily attribute-centric, which means it tends to get this wrong when
+it comes to constructor coercion and get it pretty right when it comes to
+accessor coercion. Imagine if accessor coercion instead looked something like
+this:
+
+    has '_maybe_uri_string', is => Str,    required => unless('_maybe_uri_object');
+    has '_maybe_uri_object', is => Object, required => unless('_maybe_uri_string');
+
+    has 'uri'  => ( is => 'rw', isa => 'My::Types::URI', coerce => 1 );
+
+    sub _coerce_uri_from_maybe {
+        my $self = shift;
+
+        if (my $uri_string = $self->_maybe_uri_string) {
+            return $URI->new( $uri_string, 'http' );
+        }
+
+        if (my $uri_object = $self->_maybe_uri_object) {
+            return $uri_object if $uri_object->isa('URI');
+            return Params::Coerce::coerce( 'URI', $uri_object );
+        }
+
+        # there's a missing branch here
+        # this is not ideal
+        # do not use this code
+    }
+
+By forcing object instantiation into a single path of generated `new()` (though
+with `BUILD()` and `BUILDARGS()`), Moose fails to account for coercion at the
+object constructor level while doing a pretty good job of exposing its use at
+the attribute level. Moose recognizes that there may be multiple valid ways of
+setting an attribute value but makes it difficult to model something like the
+`DateTime` approach of instantiating an object with explicit time and date
+attributes or epoch seconds or the current time.
+
+This could be solved with a Factory pattern, but that's working around a
+deficiency in the object model. Strong support for class methods which
+themselves wrap object construction may also work; this is worth considering in
+more detail.
+
 ## Focus on the Core of an Object System
 
 What are the most important features of an object system? If you look at what
@@ -251,6 +370,17 @@ of this document....
 
 # SUGGESTED SEMANTICS OF A NEW OBJECT SYSTEM
 
+## Different Types of Coercion are Distinct
+
+A good object system will recognize that there may be multiple valid ways to
+construct a coherent object.
+
+A good object system will recognize that constructor parameters should not
+necessarily be treated the same way as attributes.
+
+A good object system will not force object construction to go through a single
+parameter validation, coercion, and population mechanism.
+
 ## Attributes are Private to Classes, Roles, and Subclasses
 
 ## Methods are Not Functions
@@ -260,3 +390,9 @@ of this document....
 ## Attribute Representations are Opaque
 
 ## Attribute Representations are Substitutable
+
+See "Different Types of Coercion are Distinct" for a variant of this position.
+A SQLite database handle may operate on an in-memory database just as well as a
+file-backed database. (In Unix terms, the file-backed database may even use a
+RAM disk, which suggests that representation independence is a deeper principle
+than post-Smalltalk object systems.)
